@@ -1,0 +1,64 @@
+name: Auto-Merge Unique PRs
+
+on:
+  pull_request:
+    types: [opened, reopened]
+
+jobs:
+  check-and-merge:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repo
+      uses: actions/checkout@v3
+
+    - name: Get PR details
+      id: pr_info
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { owner, repo } = context.repo;
+          const pr = context.payload.pull_request;
+          const sourceBranch = pr.head.ref;
+          const targetBranch = pr.base.ref;
+
+          const { data: prs } = await github.rest.pulls.list({
+            owner,
+            repo,
+            state: 'open',
+            base: targetBranch,
+          });
+
+          const duplicates = prs.filter(existing =>
+            existing.head.ref === sourceBranch &&
+            existing.number !== pr.number
+          );
+
+          if (duplicates.length > 0) {
+            core.setFailed(`Duplicate PR found from '${sourceBranch}' to '${targetBranch}'.`);
+          } else {
+            core.setOutput('can_merge', 'true');
+            core.setOutput('pr_number', pr.number);
+          }
+
+    - name: Auto-merge PR if no duplicate
+      if: steps.pr_info.outputs.can_merge == 'true'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const prNumber = parseInt(core.getInput('pr_number'));
+          const { owner, repo } = context.repo;
+
+          await github.rest.pulls.merge({
+            owner,
+            repo,
+            pull_number: prNumber,
+            merge_method: 'squash', // or 'merge' or 'rebase'
+          });
+
+          console.log(`✅ PR #${prNumber} merged successfully.`);
+
+    - name: Send notification
+      if: steps.pr_info.outputs.can_merge == 'true'
+      run: |
+        echo "🎉 Pull Request #${{ steps.pr_info.outputs.pr_number }} has been merged!" >> $GITHUB_STEP_SUMMARY
